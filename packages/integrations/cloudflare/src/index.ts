@@ -15,7 +15,7 @@ import glob from 'tiny-glob';
 import { deduplicatePatterns } from './utils/deduplicatePatterns.js';
 import { getAdapter } from './utils/getAdapter.js';
 import { getCFObject } from './utils/getCFObject.js';
-import { getD1Bindings, getEnvVars, getR2Bindings } from './utils/parser.js';
+import { getD1Bindings, getEnvVars, getKVBindings, getR2Bindings } from './utils/parser.js';
 import { prependForwardSlash } from './utils/prependForwardSlash.js';
 import { rewriteWasmImportPath } from './utils/rewriteWasmImportPath.js';
 import { wasmModuleLoader } from './utils/wasm-module-loader.js';
@@ -126,6 +126,7 @@ export default function createIntegration(args?: Options): AstroIntegration {
 							const vars = await getEnvVars();
 							const D1Bindings = await getD1Bindings();
 							const R2Bindings = await getR2Bindings();
+							const KVBindings = await getKVBindings();
 
 							let bindingsEnv = new Object({});
 
@@ -141,7 +142,10 @@ export default function createIntegration(args?: Options): AstroIntegration {
 								d1Persist: true,
 								r2Buckets: R2Bindings,
 								r2Persist: true,
+								kvNamespaces: KVBindings,
+								kvPersist: true,
 							});
+
 							for (const D1Binding of D1Bindings) {
 								const db = await _mf.getD1Database(D1Binding);
 								Reflect.set(bindingsEnv, D1Binding, db);
@@ -149,6 +153,10 @@ export default function createIntegration(args?: Options): AstroIntegration {
 							for (const R2Binding of R2Bindings) {
 								const bucket = await _mf.getR2Bucket(R2Binding);
 								Reflect.set(bindingsEnv, R2Binding, bucket);
+							}
+							for (const KVBinding of KVBindings) {
+								const namespace = await _mf.getKVNamespace(KVBinding);
+								Reflect.set(bindingsEnv, KVBinding, namespace);
 							}
 
 							process.env.PWD = originalPWD;
