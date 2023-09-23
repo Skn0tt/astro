@@ -6,18 +6,19 @@ import { NoOpLog } from '@miniflare/shared';
 import { MemoryStorage } from '@miniflare/storage-memory';
 import { AstroError } from 'astro/errors';
 import esbuild from 'esbuild';
+import { Miniflare } from 'miniflare';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { dirname, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import glob from 'tiny-glob';
-import { getCFObject } from './utils/getCFObject.js';
-import { getEnvVars } from './utils/parser.js';
-import { getAdapter } from './utils/getAdapter.js';
-import { wasmModuleLoader } from './utils/wasm-module-loader.js';
-import { prependForwardSlash } from './utils/prependForwardSlash.js';
 import { deduplicatePatterns } from './utils/deduplicatePatterns.js';
+import { getAdapter } from './utils/getAdapter.js';
+import { getCFObject } from './utils/getCFObject.js';
+import { getD1Bindings, getEnvVars } from './utils/parser.js';
+import { prependForwardSlash } from './utils/prependForwardSlash.js';
 import { rewriteWasmImportPath } from './utils/rewriteWasmImportPath.js';
+import { wasmModuleLoader } from './utils/wasm-module-loader.js';
 
 export type { AdvancedRuntime } from './entrypoints/server.advanced.js';
 export type { DirectoryRuntime } from './entrypoints/server.directory.js';
@@ -69,6 +70,7 @@ class StorageFactory {
 export default function createIntegration(args?: Options): AstroIntegration {
 	let _config: AstroConfig;
 	let _buildConfig: BuildConfig;
+	let _mf: Miniflare;
 	let _entryPoints = new Map<RouteData, URL>();
 
 	const SERVER_BUILD_FOLDER = '/$server_build/';
@@ -122,7 +124,26 @@ export default function createIntegration(args?: Options): AstroIntegration {
 						try {
 							const cf = await getCFObject(runtimeMode);
 							const vars = await getEnvVars();
+							const D1Bindings = await getD1Bindings();
+							let bindingsEnv = new Object({});
 
+							// fix for the error "kj/filesystem-disk-unix.c++:1709: warning: PWD environment variable doesn't match current directory."
+							// note: This mismatch might be primarily due to the test runner.
+							const originalPWD = process.env.PWD;
+							process.env.PWD = process.cwd();
+
+							_mf = new Miniflare({
+								modules: true,
+								script: '',
+								d1Databases: D1Bindings,
+								d1Persist: true,
+							});
+							for (const D1Binding of D1Bindings) {
+								const db = await _mf.getD1Database(D1Binding);
+								Reflect.set(bindingsEnv, D1Binding, db);
+							}
+
+							process.env.PWD = originalPWD;
 							const clientLocalsSymbol = Symbol.for('astro.locals');
 							Reflect.set(req, clientLocalsSymbol, {
 								runtime: {
@@ -136,6 +157,7 @@ export default function createIntegration(args?: Options): AstroIntegration {
 										// will be fetched from git dynamically once we support mocking of bindings
 										CF_PAGES_COMMIT_SHA: 'TBA',
 										CF_PAGES_URL: `http://${req.headers.host}`,
+										...bindingsEnv,
 										...vars,
 									},
 									cf: cf,
@@ -155,6 +177,14 @@ export default function createIntegration(args?: Options): AstroIntegration {
 							next();
 						}
 					});
+				}
+			},
+			'astro:server:done': async ({ logger }) => {
+				if (_mf) {
+					// TODO: remove once upstream is fixed https://github.com/cloudflare/miniflare/issues/695
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					logger.info('Cleaning up the Miniflare instance, and shutting down the workerd server.');
+					await _mf.dispose();
 				}
 			},
 			'astro:build:setup': ({ vite, target }) => {
