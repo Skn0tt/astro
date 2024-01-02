@@ -78,6 +78,17 @@ describe('Streaming', () => {
 			}
 			expect(chunks.length).to.be.greaterThan(1);
 		});
+
+		it('error in rendering results in 500 status code', async () => {
+			const app = await fixture.loadTestAdapterApp();
+			const request = new Request('http://example.com/error');
+			const response = await app.render(request);
+
+			expect(response.status).to.equal(200);
+
+			// this will throw!
+			await response.text()
+		});
 	});
 });
 
@@ -144,6 +155,14 @@ describe('Streaming disabled', () => {
 
 			expect($('header h1')).to.have.a.lengthOf(1);
 			expect($('ul li')).to.have.a.lengthOf(10);
+		});
+
+		it('error in rendering results in 500 status code', async () => {
+			const app = await fixture.loadTestAdapterApp(false);
+			const request = new Request('http://example.com/error');
+			const response = await app.render(request);
+
+			expect(response.status).to.equal(500);
 		});
 	});
 });
